@@ -12,7 +12,7 @@ A PowerShell script to configure Microsoft Defender antivirus exclusions for Vee
 - **Idempotent** — Skips exclusions that already exist (or don't exist when removing)
 - **Reversible** — Use `-Remove` to cleanly undo all exclusions
 - **Safe** — Full `-WhatIf` support for dry-run testing
-- **Process exclusions** — Automatically scans Veeam installation directories for executables
+- **Process exclusions** — Automatically scans Veeam installation directories for executable paths
 
 ## Requirements
 
@@ -68,7 +68,7 @@ Multiple roles can be specified: `-Role BackupServer,EnterpriseManager`
 |-----------|-------------|
 | `-Role` | **(Required)** One or more Veeam roles to configure |
 | `-Remove` | Remove exclusions instead of adding them |
-| `-IncludePostgreSQL` | Add PostgreSQL exclusions (install folder, data directory, postgres.exe process) |
+| `-IncludePostgreSQL` | Add PostgreSQL exclusions (install folder, data directory, postgres.exe process path) |
 | `-IncludeVeeamFLR` | Add `C:\VeeamFLR\` — review [KB1999](https://www.veeam.com/kb1999) trade-off note first |
 | `-IncludeRepositoryExtensions` | Add file extension exclusions (.vbk, .vib, .vom, etc.) globally |
 | `-CustomLogPath` | Non-default Veeam log directory (if changed per [KB1825](https://www.veeam.com/kb1825)) |
@@ -158,7 +158,7 @@ Multiple roles can be specified: `-Role BackupServer,EnterpriseManager`
 2. **Registry Lookups** — VBR Catalog, NFS root, and PostgreSQL paths are resolved from registry (with fallback defaults)
 3. **Package Detection** — For `BackupInfrastructure`, the script scans Programs & Features to detect installed Veeam components
 4. **Version Detection** — Checks whether v12 (x86) or v13+ (x64) paths exist for Backup Transport
-5. **Process Scanning** — Scans Veeam installation directories for .exe files
+5. **Process Scanning** — Scans Veeam installation directories for .exe paths
 6. **Idempotency Check** — Reads current Defender exclusions to skip duplicates
 7. **Apply Exclusions** — Adds (or removes) path, process, and extension exclusions via `Add-MpPreference` / `Remove-MpPreference`
 
@@ -177,7 +177,7 @@ Multiple roles can be specified: `-Role BackupServer,EnterpriseManager`
 [14:32:01] [INFO]   + PostgreSQL: PostgreSQL 15
 [14:32:01] [INFO]       install : C:\Program Files\PostgreSQL\15
 [14:32:01] [INFO]       data    : C:\Program Files\PostgreSQL\15\data
-[14:32:01] [INFO]       process : postgres.exe
+[14:32:01] [INFO]       process : C:\Program Files\PostgreSQL\15\bin\postgres.exe
 
 [14:32:01] [INFO] -- Process Exclusions --------------------
 [14:32:01] [INFO]   Found 47 unique process(es) in Veeam directories
@@ -215,13 +215,13 @@ Folder and file pattern exclusions added via `Add-MpPreference -ExclusionPath`:
 
 ### Process Exclusions
 
-Executable names discovered by scanning Veeam installation directories:
+Executable paths discovered by scanning Veeam installation directories:
 
-- `Veeam.Backup.Service.exe`
-- `Veeam.Backup.Manager.exe`
-- `VeeamTransportSvc.exe`
-- `postgres.exe` (when `-IncludePostgreSQL` specified)
-- All other .exe files found in Veeam folders...
+- `C:\Program Files\Veeam\Backup and Replication\Veeam.Backup.Service.exe`
+- `C:\Program Files\Veeam\Backup and Replication\Veeam.Backup.Manager.exe`
+- `C:\Program Files\Common Files\Veeam\Backup and Replication\VeeamTransportSvc.exe`
+- `C:\Program Files\PostgreSQL\15\bin\postgres.exe` (when `-IncludePostgreSQL` specified)
+- All other .exe paths found in Veeam folders...
 
 ### Extension Exclusions (with `-IncludeRepositoryExtensions`)
 

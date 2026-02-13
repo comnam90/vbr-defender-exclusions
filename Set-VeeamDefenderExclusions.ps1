@@ -57,7 +57,7 @@
 .PARAMETER IncludePostgreSQL
     Adds PostgreSQL exclusions for the Veeam configuration database.
     The script auto-detects the PostgreSQL install location from registry
-    and adds: the install folder, data directory, and postgres.exe process.
+    and adds: the install folder, data directory, and postgres.exe path.
     Falls back to C:\Program Files\PostgreSQL\ if registry lookup fails.
     Required when using a local PostgreSQL instance (default for VBR 12+).
 
@@ -157,26 +157,26 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    # ── Role selection ──────────────────────────────────────────────────────
+    # -- Role selection ------------------------------------------------------
     [Parameter(Mandatory)]
     [ValidateSet('BackupServer','EnterpriseManager','Console',
                  'ProtectedGuest','RestoreTarget','BackupInfrastructure')]
     [string[]]$Role,
 
-    # ── Common flags ────────────────────────────────────────────────────────
+    # -- Common flags --------------------------------------------------------
     [switch]$IncludeVeeamFLR,
     [switch]$IncludePostgreSQL,
     [switch]$IncludeRepositoryExtensions,
     [switch]$Remove,
     [ValidateNotNullOrEmpty()] [string]$CustomLogPath,
 
-    # ── ProtectedGuest feature flags ────────────────────────────────────────
+    # -- ProtectedGuest feature flags ----------------------------------------
     [switch]$EnableGuestProcessing,
     [switch]$EnableInlineEntropy,
     [switch]$EnableSQLLogBackup,
     [switch]$EnablePersistentAgent,
 
-    # ── BackupInfrastructure configurable paths ─────────────────────────────
+    # -- BackupInfrastructure configurable paths -----------------------------
     [ValidateNotNullOrEmpty()] [string]$CDPCachePath,
     [ValidateNotNullOrEmpty()] [string]$WANCachePath,
     [ValidateNotNullOrEmpty()] [string]$InstantRecoveryWriteCachePath,
@@ -186,6 +186,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:DeferredPGWarning = $null
+$script:DeferredInfraWarning = $null
 
 # ---------------------------------------------------------------------------
 # Parameter-Role Validation (auto-add missing roles with warning)
@@ -333,6 +335,19 @@ function Get-RegValue {
     catch { return $null }
 }
 
+function Normalize-ExclusionPath {
+    <#
+    .SYNOPSIS
+        Normalizes exclusion paths while preserving drive-root paths (for
+        example, C:\).
+    #>
+    param([Parameter(Mandatory)] [string]$Path)
+
+    $trimmed = $Path.Trim()
+    if ($trimmed -match '^[A-Za-z]:\\$') { return $trimmed }
+    return $trimmed.TrimEnd('\')
+}
+
 function Get-InstalledPackageNames {
     <#
     .SYNOPSIS
@@ -344,6 +359,7 @@ function Get-InstalledPackageNames {
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
     )
     [string[]]$names = @()
+    [int]$skippedPackageEntries = 0
     foreach ($root in $roots) {
         if (Test-Path $root) {
             $names += Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
@@ -351,9 +367,12 @@ function Get-InstalledPackageNames {
                     $dn = (Get-ItemProperty -Path $_.PSPath -Name DisplayName -ErrorAction Stop).DisplayName
                     if ($dn) { $dn }
                 }
-                catch { }   # no DisplayName value -- skip
+                catch { $skippedPackageEntries++ }   # no DisplayName value -- skip
             }
         }
+    }
+    if ($skippedPackageEntries -gt 0) {
+        Write-Log "  Package scan: skipped $skippedPackageEntries uninstall entry(ies) without readable DisplayName."
     }
     return $names
 }
@@ -365,6 +384,7 @@ function Get-VBRCatalogPath {
     #>
     $v = Get-RegValue -Key 'HKLM:\SOFTWARE\Veeam\Veeam Backup Catalog' -Name 'CatalogPath'
     if ($v) {
+        $v = Normalize-ExclusionPath -Path $v
         Write-Log "  VBRCatalog : $v"
         return $v
     }
@@ -379,6 +399,7 @@ function Get-NFSRootPath {
     #>
     $v = Get-RegValue -Key 'HKLM:\SOFTWARE\Wow6432Node\Veeam\Veeam NFS' -Name 'RootFolder'
     if ($v) {
+        $v = Normalize-ExclusionPath -Path $v
         Write-Log "  NFS RootFolder : $v"
         return $v
     }
@@ -408,7 +429,7 @@ function Add-PathsToSet {
 function Get-ExecutablesFromPaths {
     <#
     .SYNOPSIS
-        Scans directories for .exe files and returns unique process names.
+        Scans directories for .exe files and returns unique process paths.
     #>
     param(
         [Parameter(Mandatory)]
@@ -421,9 +442,11 @@ function Get-ExecutablesFromPaths {
         if (-not (Test-Path $path -PathType Container)) { continue }
         try {
             Get-ChildItem -Path $path -Filter '*.exe' -Recurse -ErrorAction SilentlyContinue |
-                ForEach-Object { [void]$exeSet.Add($_.Name) }
+                ForEach-Object { [void]$exeSet.Add($_.FullName) }
         }
-        catch { }  # Skip inaccessible directories
+        catch {
+            Write-Log "  Process scan: could not scan '$path'; skipping." -Level WARN
+        }
     }
     return $exeSet
 }
@@ -442,15 +465,14 @@ function Get-PostgreSQLInstallInfo {
     foreach ($root in $uninstallRoots) {
         if (-not (Test-Path $root)) { continue }
 
-        $pgKey = Get-ChildItem $root -ErrorAction SilentlyContinue |
-            Where-Object { $_.PSChildName -like 'PostgreSQL*' } |
-            Select-Object -First 1
+        $pgKeys = Get-ChildItem $root -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSChildName -like 'PostgreSQL*' }
 
-        if ($pgKey) {
+        foreach ($pgKey in $pgKeys) {
             try {
                 $props = Get-ItemProperty -Path $pgKey.PSPath -ErrorAction Stop
                 if ($props.InstallLocation) {
-                    $installPath = $props.InstallLocation.TrimEnd('\')
+                    $installPath = Normalize-ExclusionPath -Path $props.InstallLocation
                     return @{
                         InstallPath = $installPath
                         DataPath    = Join-Path $installPath 'data'
@@ -459,7 +481,9 @@ function Get-PostgreSQLInstallInfo {
                     }
                 }
             }
-            catch { }
+            catch {
+                Write-Log "  PostgreSQL registry entry '$($pgKey.PSChildName)' could not be read; skipping." -Level WARN
+            }
         }
     }
     return $null
@@ -665,7 +689,7 @@ function Add-BackupInfrastructurePaths {
     $detections = 0
 
     foreach ($pkg in $packageDefinitions) {
-        if ($pkgNames -ilike $pkg.Pattern) {
+        if (@($pkgNames -ilike $pkg.Pattern).Count -gt 0) {
             Write-Log "  [pkg] $($pkg.Name)"
             $detections++
 
@@ -772,8 +796,9 @@ function Add-CommonOptionalPaths {
                 Write-Log "      data    : $($pgInfo.DataPath)"
             }
             if (Test-Path $pgInfo.ProcessPath) {
-                [void]$ProcessSet.Add('postgres.exe')
-                Write-Log '      process : postgres.exe'
+                $pgProcessPath = Normalize-ExclusionPath -Path $pgInfo.ProcessPath
+                [void]$ProcessSet.Add($pgProcessPath)
+                Write-Log "      process : $pgProcessPath"
             }
         } else {
             # Fallback to default path if registry lookup fails
@@ -889,7 +914,7 @@ try {
     $mpPref = Get-MpPreference -ErrorAction Stop
     if ($mpPref.ExclusionPath) {
         foreach ($ep in $mpPref.ExclusionPath) {
-            [void]$existingPathSet.Add($ep.TrimEnd('\'))
+            [void]$existingPathSet.Add((Normalize-ExclusionPath -Path $ep))
         }
     }
     if ($mpPref.ExclusionExtension) {
@@ -922,7 +947,7 @@ Write-Log ''
 Write-Log "=== ${actionVerb}ing $($pathSet.Count) unique path exclusion(s) ==="
 
 foreach ($p in $pathSet) {
-    $normalizedPath = $p.TrimEnd('\')
+    $normalizedPath = Normalize-ExclusionPath -Path $p
     $exists = $existingPathSet.Contains($normalizedPath)
 
     if ($Remove) {
@@ -932,9 +957,9 @@ foreach ($p in $pathSet) {
             continue
         }
         try {
-            if ($PSCmdlet.ShouldProcess($p, 'Remove-MpPreference -ExclusionPath')) {
-                Remove-MpPreference -ExclusionPath $p -ErrorAction Stop
-                Write-Log "  DEL   $p" -Level OK
+            if ($PSCmdlet.ShouldProcess($normalizedPath, 'Remove-MpPreference -ExclusionPath')) {
+                Remove-MpPreference -ExclusionPath $normalizedPath -ErrorAction Stop
+                Write-Log "  DEL   $normalizedPath" -Level OK
                 $stats.PathsRemoved++
             }
         }
@@ -949,9 +974,9 @@ foreach ($p in $pathSet) {
             continue
         }
         try {
-            if ($PSCmdlet.ShouldProcess($p, 'Add-MpPreference -ExclusionPath')) {
-                Add-MpPreference -ExclusionPath $p -ErrorAction Stop
-                Write-Log "  ADD   $p" -Level OK
+            if ($PSCmdlet.ShouldProcess($normalizedPath, 'Add-MpPreference -ExclusionPath')) {
+                Add-MpPreference -ExclusionPath $normalizedPath -ErrorAction Stop
+                Write-Log "  ADD   $normalizedPath" -Level OK
                 $stats.PathsAdded++
             }
         }
