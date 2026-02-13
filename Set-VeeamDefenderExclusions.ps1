@@ -148,6 +148,9 @@
     parameters as when adding to ensure all exclusions are removed.
 
 .NOTES
+    Created by: Ben Thomas
+    Version: 1.0.0
+
     Must be run as Administrator.  Requires Windows 10 / Server 2016 or
     later with Microsoft Defender active.
 

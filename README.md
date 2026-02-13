@@ -27,7 +27,7 @@ Download the script or clone this repository:
 
 ```powershell
 # Option 1: Download directly
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/comnam90/vbr-defender-exclusions/master/Set-VeeamDefenderExclusions.ps1" -OutFile "Set-VeeamDefenderExclusions.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/comnam90/vbr-defender-exclusions/main/Set-VeeamDefenderExclusions.ps1" -OutFile "Set-VeeamDefenderExclusions.ps1"
 
 # Option 2: Clone the repository
 git clone https://github.com/comnam90/vbr-defender-exclusions.git
