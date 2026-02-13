@@ -1,119 +1,288 @@
-# Veeam Backup & Replication - Microsoft Defender Exclusions
+# Set-VeeamDefenderExclusions
 
-A role-aware PowerShell script that automates Microsoft Defender exclusions for Veeam Backup & Replication infrastructure based on [Veeam KB1999](https://www.veeam.com/kb1999).
+A PowerShell script to configure Microsoft Defender antivirus exclusions for Veeam Backup & Replication infrastructure. Automates the recommendations from [Veeam KB1999](https://www.veeam.com/kb1999).
 
-## The Problem
-
-Manual antivirus exclusions are tedious and error-prone. A typical VBR server acting as a mount server, proxy, and repository requires **57 individual exclusions** (25 paths + 32 file extensions). Miss one and you'll spend the next three months troubleshooting intermittent performance issues.
-
-When Microsoft Defender decides to real-time scan a 4TB `.vbk` file every time Veeam touches it, performance falls off a cliff.
-
-## The Solution
-
-`Set-VeeamDefenderExclusions.ps1` is infrastructure-aware. You declare what the server does and it builds the exclusion list accordingly. It's idempotent, safe to run multiple times, and smart enough to understand component roles.
+> **📝 Blog Post:** [Automating Veeam Defender Exclusions](https://bcthomas.com/2026/02/automating-veeam-defender-exclusions/) — Read about why this exists and how it works.
 
 ## Features
 
-- **Role-Based Configuration**: Exclude only what each server needs
-- **Intelligent Auto-Detection**: Queries registry for actual install paths, scans for installed packages
-- **PostgreSQL Awareness**: Automatically detects and excludes PostgreSQL paths
-- **Process Scanning**: Dynamically builds process exclusions by scanning installation directories
-- **Idempotent**: Checks existing exclusions before adding, safe to run repeatedly
-- **WhatIf Support**: Preview changes before applying
+- **Role-based configuration** — Select one or more Veeam roles; exclusions are merged and deduplicated automatically
+- **Three exclusion types** — Path, process, and file extension exclusions
+- **Intelligent detection** — Auto-discovers installed Veeam packages, PostgreSQL location, and version-specific paths (v12 vs v13)
+- **Idempotent** — Skips exclusions that already exist (or don't exist when removing)
+- **Reversible** — Use `-Remove` to cleanly undo all exclusions
+- **Safe** — Full `-WhatIf` support for dry-run testing
+- **Process exclusions** — Automatically scans Veeam installation directories for executables
 
 ## Requirements
 
-- Windows PowerShell 5.1 or PowerShell 7+
+- Windows 10 / Server 2016 or later
+- PowerShell 5.1+
 - Administrator privileges
-- Veeam Backup & Replication installed
+- Microsoft Defender active (WinDefend service running)
 
-## Usage
+## Installation
 
-### Standard All-In-One VBR Server
+Download the script or clone this repository:
 
 ```powershell
+# Option 1: Download directly
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/comnam90/vbr-defender-exclusions/master/Set-VeeamDefenderExclusions.ps1" -OutFile "Set-VeeamDefenderExclusions.ps1"
+
+# Option 2: Clone the repository
+git clone https://github.com/comnam90/vbr-defender-exclusions.git
+cd vbr-defender-exclusions
+```
+
+## Quick Start
+
+```powershell
+# Typical VBR 12+ server with local PostgreSQL
 .\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL
-```
 
-### Repository Server
-
-The `-IncludeRepositoryExtensions` switch adds file type exclusions (`.vbk`, `.vib`, etc.) that repositories need but proxies don't.
-
-```powershell
-.\Set-VeeamDefenderExclusions.ps1 -Role BackupInfrastructure -IncludeRepositoryExtensions
-```
-
-### Backup Proxy
-
-```powershell
-.\Set-VeeamDefenderExclusions.ps1 -Role BackupInfrastructure
-```
-
-### Preview Changes (WhatIf)
-
-```powershell
+# Preview changes without applying (dry-run)
 .\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL -WhatIf
+
+# Remove exclusions
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL -Remove
 ```
 
-### Remove Exclusions
+## Roles
 
-The `-Remove` switch reverses the logic, removing only Veeam-specific exclusions defined by the specified roles.
+| Role | Description |
+|------|-------------|
+| `BackupServer` | Veeam Backup & Replication Server |
+| `EnterpriseManager` | Veeam Backup Enterprise Manager |
+| `Console` | Veeam Backup & Replication Console |
+| `ProtectedGuest` | Guest OS of a protected Windows VM |
+| `RestoreTarget` | Guest OS used as a file-level restore target |
+| `BackupInfrastructure` | Proxy, Repository, WAN Accelerator, Mount Server, etc. |
 
-```powershell
-.\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -Remove
-```
+Multiple roles can be specified: `-Role BackupServer,EnterpriseManager`
 
 ## Parameters
 
-### `-Role` (Required)
-Specifies the Veeam infrastructure role(s) for this server.
+### Common Flags
 
-**Valid values:**
-- `BackupServer` - VBR server with catalog and configuration database
-- `BackupInfrastructure` - Proxy, repository, mount server, WAN accelerator, etc.
-- `ProtectedGuest` - VM with Application-Aware Processing enabled
+| Parameter | Description |
+|-----------|-------------|
+| `-Role` | **(Required)** One or more Veeam roles to configure |
+| `-Remove` | Remove exclusions instead of adding them |
+| `-IncludePostgreSQL` | Add PostgreSQL exclusions (install folder, data directory, postgres.exe process) |
+| `-IncludeVeeamFLR` | Add `C:\VeeamFLR\` — review [KB1999](https://www.veeam.com/kb1999) trade-off note first |
+| `-IncludeRepositoryExtensions` | Add file extension exclusions (.vbk, .vib, .vom, etc.) globally |
+| `-CustomLogPath` | Non-default Veeam log directory (if changed per [KB1825](https://www.veeam.com/kb1825)) |
 
-Can accept multiple roles: `-Role BackupServer, BackupInfrastructure`
+### ProtectedGuest Flags
 
-### `-IncludePostgreSQL` (Switch)
-Adds exclusions for PostgreSQL database engine. Automatically detects version and data directory.
+| Parameter | Description |
+|-----------|-------------|
+| `-EnableGuestProcessing` | Application-Aware Processing / Guest File System Indexing paths |
+| `-EnableInlineEntropy` | Malware Detection Inline Entropy Analysis (*.ridx) |
+| `-EnableSQLLogBackup` | SQL Server Transaction Log Backup (VeeamLogShipper) |
+| `-EnablePersistentAgent` | Veeam Guest Agent install folder |
 
-### `-IncludeRepositoryExtensions` (Switch)
-Adds file extension exclusions for backup files (`.vbk`, `.vib`, `.vrb`, etc.). Use on repository servers.
+### BackupInfrastructure Paths
 
-### `-Remove` (Switch)
-Removes exclusions instead of adding them. Removes only the exclusions that would be added based on the specified roles.
+| Parameter | Description |
+|-----------|-------------|
+| `-CDPCachePath` | CDP Proxy cache folder (default: `C:\VeeamCDP`) |
+| `-WANCachePath` | WAN Accelerator cache folder (required when WAN Accelerator detected) |
+| `-InstantRecoveryWriteCachePath` | vPowerNFS instant-recovery write-cache path |
+| `-BackupFilesPath` | Backup repository root folder |
+| `-CapacityTierArchiveIndexPath` | Capacity Tier archive-index directory |
 
-### `-WhatIf` (Switch)
-Shows what changes would be made without actually applying them.
+## Usage Examples
+
+### Backup Server
+
+```powershell
+# Standard VBR 12+ with PostgreSQL
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL
+
+# VBR with Enterprise Manager on same server
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupServer,EnterpriseManager -IncludePostgreSQL
+
+# Include VeeamFLR folder (read KB4535 trade-off note first)
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL -IncludeVeeamFLR
+```
+
+### Backup Infrastructure (Proxy/Repository)
+
+```powershell
+# Auto-detect installed packages
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupInfrastructure
+
+# Windows Repository with backup files path
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupInfrastructure -BackupFilesPath "D:\VeeamBackups"
+
+# Repository with global extension exclusions instead of folder
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupInfrastructure -IncludeRepositoryExtensions
+
+# WAN Accelerator (cache path required)
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupInfrastructure -WANCachePath "E:\WANCache"
+```
+
+### Protected Guest VMs
+
+```powershell
+# Guest with Application-Aware Processing
+.\Set-VeeamDefenderExclusions.ps1 -Role ProtectedGuest -EnableGuestProcessing
+
+# Guest with SQL log backup and persistent agent
+.\Set-VeeamDefenderExclusions.ps1 -Role ProtectedGuest -EnableGuestProcessing -EnableSQLLogBackup -EnablePersistentAgent
+
+# Malware detection inline entropy analysis
+.\Set-VeeamDefenderExclusions.ps1 -Role ProtectedGuest -EnableInlineEntropy
+```
+
+### Console Only
+
+```powershell
+.\Set-VeeamDefenderExclusions.ps1 -Role Console
+```
+
+### Cleanup
+
+```powershell
+# Remove all exclusions (use same parameters as when adding)
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL -Remove
+
+# Preview removal
+.\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL -Remove -WhatIf
+```
 
 ## How It Works
 
-1. **Role Detection**: Determines what exclusions are needed based on specified roles
-2. **Package Scanning**: Scans installed Windows packages to detect components (WAN Accelerator, CDP Proxy, etc.)
-3. **Registry Queries**: Retrieves actual install paths from registry (VBR Catalog, NFS root)
-4. **Process Discovery**: Scans Veeam installation directories for all executables
-5. **PostgreSQL Detection**: If included, locates PostgreSQL version and data directory
-6. **Idempotent Application**: Checks existing exclusions before adding to avoid duplicates
+1. **Role Processing** — Each selected role adds its required paths to a deduplicated HashSet
+2. **Registry Lookups** — VBR Catalog, NFS root, and PostgreSQL paths are resolved from registry (with fallback defaults)
+3. **Package Detection** — For `BackupInfrastructure`, the script scans Programs & Features to detect installed Veeam components
+4. **Version Detection** — Checks whether v12 (x86) or v13+ (x64) paths exist for Backup Transport
+5. **Process Scanning** — Scans Veeam installation directories for .exe files
+6. **Idempotency Check** — Reads current Defender exclusions to skip duplicates
+7. **Apply Exclusions** — Adds (or removes) path, process, and extension exclusions via `Add-MpPreference` / `Remove-MpPreference`
 
-## Edge Cases & Limitations
+## Output Example
 
-- **WAN Accelerator Cache**: Script will prompt for cache path if WAN Accelerator is detected
-- **Custom Paths**: If you've moved logs or catalogs to non-standard locations, you may need additional manual exclusions
-- **Version Support**: Tested on v12.x, handles v13+ path differences
+```
+[14:32:01] [INFO] Veeam  -  Defender Exclusion Setup
+[14:32:01] [INFO] ===================================
+[14:32:01] [INFO] Action         : Add
+[14:32:01] [INFO] Selected roles : BackupServer
 
-## Contributing
+[14:32:01] [INFO] -- BackupServer --------------------------
+[14:32:01] [INFO]   VBRCatalog : C:\VBRCatalog
+[14:32:01] [WARN]   NFS RootFolder : registry key absent -- skipped
 
-Hit an edge case? Found a bug? Open an issue or submit a pull request. I want this to work everywhere.
+[14:32:01] [INFO]   + PostgreSQL: PostgreSQL 15
+[14:32:01] [INFO]       install : C:\Program Files\PostgreSQL\15
+[14:32:01] [INFO]       data    : C:\Program Files\PostgreSQL\15\data
+[14:32:01] [INFO]       process : postgres.exe
 
-## Related
+[14:32:01] [INFO] -- Process Exclusions --------------------
+[14:32:01] [INFO]   Found 47 unique process(es) in Veeam directories
 
-For full background and context, see the blog post: [Automating Veeam Defender Exclusions](https://bcthomas.com/2026/02/automating-veeam-defender-exclusions/)
+[14:32:01] [INFO] === Adding 18 unique path exclusion(s) ===
+[14:32:01] [OK]   ADD   C:\Program Files\Veeam
+[14:32:01] [OK]   ADD   C:\Program Files\Common Files\Veeam
+...
+
+[14:32:02] [INFO] === Results ===
+[14:32:02] [INFO]   Paths:
+[14:32:02] [INFO]     Added   : 18
+[14:32:02] [INFO]     Skipped : 0  (already present)
+[14:32:02] [INFO]     Failed  : 0
+[14:32:02] [INFO]   Processes:
+[14:32:02] [INFO]     Added   : 47
+[14:32:02] [INFO]     Skipped : 0  (already present)
+[14:32:02] [INFO]     Failed  : 0
+
+[14:32:02] [OK] Done.
+```
+
+## Exclusion Types
+
+### Path Exclusions
+
+Folder and file pattern exclusions added via `Add-MpPreference -ExclusionPath`:
+
+- `C:\Program Files\Veeam\`
+- `C:\Program Files (x86)\Veeam\`
+- `C:\ProgramData\Veeam\`
+- `C:\Windows\Veeam\`
+- `C:\VBRCatalog\` (or custom path from registry)
+- And many more based on role...
+
+### Process Exclusions
+
+Executable names discovered by scanning Veeam installation directories:
+
+- `Veeam.Backup.Service.exe`
+- `Veeam.Backup.Manager.exe`
+- `VeeamTransportSvc.exe`
+- `postgres.exe` (when `-IncludePostgreSQL` specified)
+- All other .exe files found in Veeam folders...
+
+### Extension Exclusions (with `-IncludeRepositoryExtensions`)
+
+Backup file extensions added via `Add-MpPreference -ExclusionExtension`:
+
+| Extension | Description |
+|-----------|-------------|
+| `.vbk` | Full backup files |
+| `.vib` | Incremental backup files |
+| `.vrb` | Reverse incremental files |
+| `.vbm` | Backup metadata |
+| `.vom` | NAS backup files |
+| `.vlb` | Log backup files |
+| And 20+ more... | |
+
+## Comparison to Alternatives
+
+| Feature | This Script | Simple KB Script | Interactive Menu Script |
+|---------|:-----------:|:----------------:|:-----------------------:|
+| Role-based architecture | ✓ | ✗ | ✓ |
+| Idempotent | ✓ | ✗ | ✓ |
+| `-WhatIf` support | ✓ | ✗ | ✗ |
+| Remove functionality | ✓ | ✓ | ✗ |
+| Process exclusions | ✓ | ✗ | ✓ |
+| Version detection (v12/v13) | ✓ | ✗ | ✗ |
+| Package auto-detection | ✓ | ✗ | ✗ |
+| Correct extension format | ✓ | ✗ | ✗ |
+| Automation-friendly | ✓ | ✓ | ✗ |
+| PostgreSQL registry lookup | ✓ | ✓ | ✗ |
+
+## Troubleshooting
+
+### "WinDefend service is not running"
+
+Microsoft Defender must be active. Check if another AV product has disabled it:
+
+```powershell
+Get-Service WinDefend
+Get-MpComputerStatus
+```
+
+### Exclusions not applied
+
+Run with `-WhatIf` to preview, then check current exclusions:
+
+```powershell
+(Get-MpPreference).ExclusionPath
+(Get-MpPreference).ExclusionProcess
+(Get-MpPreference).ExclusionExtension
+```
+
+### Registry keys not found
+
+The script uses sensible defaults when registry keys are missing. Warnings are displayed but execution continues.
+
+## References
+
+- [Veeam KB4535 — Antivirus Exclusions](https://www.veeam.com/kb4535)
+- [Veeam KB1825 — Custom Log Paths](https://www.veeam.com/kb1825)
+- [PostgreSQL Wiki — Antivirus Software](https://wiki.postgresql.org/wiki/Running_%26_Installing_PostgreSQL_On_Native_Windows#Antivirus_software)
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file for details
-
-## Credits
-
-Based on guidance from [Veeam KB1999: Antivirus Exclusions](https://www.veeam.com/kb1999)
+MIT License
