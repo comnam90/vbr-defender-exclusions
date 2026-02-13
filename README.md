@@ -103,7 +103,7 @@ Multiple roles can be specified: `-Role BackupServer,EnterpriseManager`
 # VBR with Enterprise Manager on same server
 .\Set-VeeamDefenderExclusions.ps1 -Role BackupServer,EnterpriseManager -IncludePostgreSQL
 
-# Include VeeamFLR folder (read KB4535 trade-off note first)
+# Include VeeamFLR folder (read KB1999 trade-off note first)
 .\Set-VeeamDefenderExclusions.ps1 -Role BackupServer -IncludePostgreSQL -IncludeVeeamFLR
 ```
 
@@ -279,7 +279,7 @@ The script uses sensible defaults when registry keys are missing. Warnings are d
 
 ## References
 
-- [Veeam KB4535 — Antivirus Exclusions](https://www.veeam.com/kb4535)
+- [Veeam KB1999 — Antivirus Exclusions](https://www.veeam.com/kb1999)
 - [Veeam KB1825 — Custom Log Paths](https://www.veeam.com/kb1825)
 - [PostgreSQL Wiki — Antivirus Software](https://wiki.postgresql.org/wiki/Running_%26_Installing_PostgreSQL_On_Native_Windows#Antivirus_software)
 
